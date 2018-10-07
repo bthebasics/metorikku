@@ -5,11 +5,12 @@ import com.yotpo.metorikku.exceptions.MetorikkuException
 import com.yotpo.metorikku.output.MetricOutputWriter
 import org.apache.log4j.{LogManager, Logger}
 import org.apache.spark.sql.DataFrame
+import org.apache.spark.sql.streaming.Trigger
 
 
 class KafkaOutputWriter(props: Map[String, String], config: Option[Kafka]) extends MetricOutputWriter {
 
-  case class KafkaOutputProperties(topic: String, keyColumn: String, valueColumn: String, outputMode: String)
+  case class KafkaOutputProperties(topic: String, keyColumn: String, valueColumn: String, outputMode: String, processingTime: String)
 
   val log: Logger = LogManager.getLogger(this.getClass)
 
@@ -23,7 +24,11 @@ class KafkaOutputWriter(props: Map[String, String], config: Option[Kafka]) exten
     case None => throw MetorikkuException("valueColumn is mandatory of KafkaOutputWriter")
   }
 
-  val kafkaOptions = KafkaOutputProperties(topic, props.getOrElse("keyColumn", ""), valueColumn, props.getOrElse("outputMode", "append"))
+  val kafkaOptions = KafkaOutputProperties(topic,
+    props.getOrElse("keyColumn", ""),
+    valueColumn,
+    props.getOrElse("outputMode", "append"),
+    props.getOrElse("processingTime", "10 seconds"))
 
   override def write(dataFrame: DataFrame): Unit = {
     config match {
@@ -56,12 +61,14 @@ class KafkaOutputWriter(props: Map[String, String], config: Option[Kafka]) exten
         log.info(s"Writing Dataframe to Kafka Topic ${kafkaOptions.topic}")
         val df: DataFrame = selectedColumnsDataframe(dataFrame)
         val stream = df.writeStream.format("kafka")
+          .trigger(Trigger.ProcessingTime(kafkaOptions.processingTime))
           .option("kafka.bootstrap.servers", bootstrapServers)
           .option("checkpointLocation", kafkaConfig.checkpointLocation.get)
           .option("topic", kafkaOptions.topic)
           .outputMode(kafkaOptions.outputMode)
         if (kafkaConfig.compressionType.nonEmpty) {
-          stream.option("kafka.compression.type", kafkaConfig.compressionType.get)}
+          stream.option("kafka.compression.type", kafkaConfig.compressionType.get)
+        }
 
         val query = stream.start()
         query.awaitTermination()
